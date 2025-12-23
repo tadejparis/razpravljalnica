@@ -208,11 +208,30 @@ func (s *Server) GetSubscriptionNode(ctx context.Context, req *pb.SubscriptionNo
 }
 
 func (s *Server) ListTopics(ctx context.Context, req *emptypb.Empty) (*pb.ListTopicsResponse, error) {
-	return nil, fmt.Errorf("not implemented")
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	topics := make([]*pb.Topic, 0, len(s.topics))
+	for _, topic := range s.topics {
+		topics = append(topics, topic)
+	}
+
+	return &pb.ListTopicsResponse{Topics: topics}, nil
 }
 
 func (s *Server) GetMessages(ctx context.Context, req *pb.GetMessagesRequest) (*pb.GetMessagesResponse, error) {
-	return nil, fmt.Errorf("not implemented")
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	messages := make([]*pb.Message, 0)
+	var i int64
+	var count int32 = 0
+	for i = req.FromMessageId; i < int64(len(s.topicChat[req.TopicId])) || count < req.Limit; i++ {
+		messages = append(messages, s.topicChat[req.TopicId][i])
+		count++
+	}
+
+	return &pb.GetMessagesResponse{Messages: messages}, nil
 }
 
 func (s *Server) SubscribeTopic(req *pb.SubscribeTopicRequest, stream pb.MessageBoard_SubscribeTopicServer) error {
