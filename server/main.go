@@ -79,7 +79,7 @@ func (s *Server) PrintState() {
 	for topicID, Name := range s.topics {
 		fmt.Printf("Topic ID = %d, Name = %s\n", topicID, Name.Name)
 		for _, msg := range s.topicChat[topicID] {
-			fmt.Printf("\tUserID = %d, Text = %s\n", msg.UserId, msg.Text)
+			fmt.Printf("\tUserID = %d, Text = %s MessageID = %d, Likes = %d\n", msg.UserId, msg.Text, msg.Id, msg.Likes)
 		}
 	}
 }
@@ -175,6 +175,13 @@ func (s *Server) DeleteMessage(ctx context.Context, req *pb.DeleteMessageRequest
 	}
 
 	delete(s.messages, req.MessageId)
+
+	for i, msg := range s.topicChat[req.TopicId] {
+		if msg.Id == req.MessageId {
+			s.topicChat[req.TopicId] = append(s.topicChat[req.TopicId][:i], s.topicChat[req.TopicId][i+1:]...)
+			break
+		}
+	}
 
 	log.Printf("deleted message: messageID=%d", req.MessageId)
 	return &emptypb.Empty{}, nil
