@@ -16,7 +16,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// implementation of MessageBoard
 type Server struct {
 	pb.UnimplementedMessageBoardServer
 	mutex sync.RWMutex
@@ -61,7 +60,7 @@ func NewServer() *Server {
 		}
 	}()
 
-	// broadcaster: reads from eventChannel and sends out to all subscribers
+	// reads from eventChannel and sends out to all subscribers
 	go func() {
 		for ev := range eventChannel {
 			s.mutex.RLock()
