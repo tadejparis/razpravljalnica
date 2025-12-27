@@ -30,6 +30,8 @@ type Server struct {
 
 	messages      map[int64]*pb.Message
 	nextMessageID int64
+
+	subscribers []*subscription
 }
 
 func NewServer() *Server {
@@ -43,6 +45,8 @@ func NewServer() *Server {
 
 		messages:      make(map[int64]*pb.Message),
 		nextMessageID: 1,
+
+		subscribers: make([]*subscription, 0),
 	}
 
 	// press enter in the server terminal to print the state
@@ -57,6 +61,32 @@ func NewServer() *Server {
 		}
 	}()
 
+	// broadcaster: reads from eventChannel and sends out to all subscribers
+	go func() {
+		for ev := range eventChannel {
+			s.mutex.RLock()
+			// snapshot subscribers to avoid holding lock while sending
+			subs := make([]*subscription, len(s.subscribers))
+			copy(subs, s.subscribers)
+			s.mutex.RUnlock()
+
+			// broadcast to matching subscribers
+			for _, sub := range subs {
+				// check if subscriber is interested in this topic
+				for _, tid := range sub.topics {
+					if tid == ev.topicID {
+						select {
+						case sub.ch <- ev.Message:
+						default:
+							// subscriber channel full; drop event for this client
+						}
+						break
+					}
+				}
+			}
+		}
+	}()
+
 	return s
 }
 
@@ -65,23 +95,45 @@ func (s *Server) PrintState() {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	fmt.Println("users:")
+	fmt.Println("\n========== SERVER STATE ==========")
+
+	fmt.Printf("\nServer Address: %s\n", IP)
+	fmt.Printf("Event Channel Buffer: %d/%d\n", len(eventChannel), cap(eventChannel))
+
+	fmt.Printf("\nUsers (%d):\n", len(s.users))
 	for id, user := range s.users {
-		fmt.Printf("ID = %d, Name = %s\n", id, user.Name)
+		fmt.Printf("  ID=%d, Name=%s\n", id, user.Name)
 	}
 
-	fmt.Println("\ntopics:")
+	fmt.Printf("\nTopics (%d):\n", len(s.topics))
 	for id, topic := range s.topics {
-		fmt.Printf("ID = %d, Name = %s\n", id, topic.Name)
+		msgCount := len(s.topicChat[id])
+		fmt.Printf("  ID=%d, Name=%s, Messages=%d\n", id, topic.Name, msgCount)
 	}
 
-	fmt.Println("\nmessages:")
-	for topicID, Name := range s.topics {
-		fmt.Printf("Topic ID = %d, Name = %s\n", topicID, Name.Name)
-		for _, msg := range s.topicChat[topicID] {
-			fmt.Printf("\tUserID = %d, Text = %s MessageID = %d, Likes = %d\n", msg.UserId, msg.Text, msg.Id, msg.Likes)
+	fmt.Printf("\nMessages (total %d):\n", len(s.messages))
+	for topicID, topic := range s.topics {
+		if len(s.topicChat[topicID]) > 0 {
+			fmt.Printf("  Topic ID=%d, Name=%s:\n", topicID, topic.Name)
+			for _, msg := range s.topicChat[topicID] {
+				fmt.Printf("    MsgID=%d, UserID=%d, Text=%q, Likes=%d\n",
+					msg.Id, msg.UserId, msg.Text, msg.Likes)
+			}
 		}
 	}
+
+	fmt.Printf("\nActive Subscribers (%d):\n", len(s.subscribers))
+	for _, sub := range s.subscribers {
+		fmt.Printf("  UserID=%d, Topics=%v, ChannelBuffer=%d/%d\n",
+			sub.userID, sub.topics, len(sub.ch), cap(sub.ch))
+	}
+
+	fmt.Printf("\nPending Subscription Requests (%d):\n", len(subscriptionRequests))
+	for i, token := range subscriptionRequests {
+		fmt.Printf("  %d: %s\n", i+1, token)
+	}
+
+	fmt.Println("\n==================================")
 }
 
 // creates a new user and assigns it an ID
@@ -138,6 +190,8 @@ func (s *Server) PostMessage(ctx context.Context, req *pb.PostMessageRequest) (*
 	s.messages[s.nextMessageID] = message
 	s.nextMessageID++
 
+	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_POST, Message: message, EventAt: timestamppb.Now()}, topicID: message.TopicId}
+
 	log.Printf("posted message: topicID=%d, userID=%d, text=%s", req.TopicId, req.UserId, req.Text)
 	return message, nil
 }
@@ -157,6 +211,8 @@ func (s *Server) UpdateMessage(ctx context.Context, req *pb.UpdateMessageRequest
 
 	s.messages[req.MessageId].Text = req.Text
 
+	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_UPDATE, Message: s.messages[req.MessageId], EventAt: timestamppb.Now()}, topicID: s.messages[req.MessageId].TopicId}
+
 	log.Printf("updated message: topicID=%d, userID=%d, text=%s", req.TopicId, req.UserId, req.Text)
 	return s.messages[req.MessageId], nil
 }
@@ -174,14 +230,16 @@ func (s *Server) DeleteMessage(ctx context.Context, req *pb.DeleteMessageRequest
 		return nil, fmt.Errorf("user with ID %d is not the owner of message with ID %d", req.UserId, req.MessageId)
 	}
 
-	delete(s.messages, req.MessageId)
-
 	for i, msg := range s.topicChat[req.TopicId] {
 		if msg.Id == req.MessageId {
 			s.topicChat[req.TopicId] = append(s.topicChat[req.TopicId][:i], s.topicChat[req.TopicId][i+1:]...)
 			break
 		}
 	}
+
+	delete(s.messages, req.MessageId)
+
+	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_DELETE, Message: nil, EventAt: timestamppb.Now()}, topicID: req.TopicId}
 
 	log.Printf("deleted message: messageID=%d", req.MessageId)
 	return &emptypb.Empty{}, nil
@@ -199,14 +257,30 @@ func (s *Server) LikeMessage(ctx context.Context, req *pb.LikeMessageRequest) (*
 
 	s.messages[req.MessageId].Likes++
 
+	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_LIKE, Message: s.messages[req.MessageId], EventAt: timestamppb.Now()}, topicID: s.messages[req.MessageId].TopicId}
+
 	log.Printf("liked message: messageID=%d, totalLikes=%d", req.MessageId, s.messages[req.MessageId].Likes)
 	return s.messages[req.MessageId], nil
 }
 
+// stores tokens which nodes will check to validate SubscribeTopicRequests
+var subscriptionRequests = make([]string, 0)
+
+// assigns a node to a user for subscriptions
 func (s *Server) GetSubscriptionNode(ctx context.Context, req *pb.SubscriptionNodeRequest) (*pb.SubscriptionNodeResponse, error) {
-	return nil, fmt.Errorf("not implemented")
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	token := fmt.Sprintf("%d", req.UserId)
+	for _, topic := range req.TopicId {
+		token += fmt.Sprintf("-%d", topic) // since we have only 1 node so far, we dont need to append the node ID
+	}
+	subscriptionRequests = append(subscriptionRequests, token)
+
+	return &pb.SubscriptionNodeResponse{SubscribeToken: token, Node: &pb.NodeInfo{NodeId: "1", Address: IP}}, nil
 }
 
+// lists all topics
 func (s *Server) ListTopics(ctx context.Context, req *emptypb.Empty) (*pb.ListTopicsResponse, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -219,6 +293,7 @@ func (s *Server) ListTopics(ctx context.Context, req *emptypb.Empty) (*pb.ListTo
 	return &pb.ListTopicsResponse{Topics: topics}, nil
 }
 
+// lists messages in a topic
 func (s *Server) GetMessages(ctx context.Context, req *pb.GetMessagesRequest) (*pb.GetMessagesResponse, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -226,7 +301,7 @@ func (s *Server) GetMessages(ctx context.Context, req *pb.GetMessagesRequest) (*
 	messages := make([]*pb.Message, 0)
 	var i int64
 	var count int32 = 0
-	for i = req.FromMessageId; i < int64(len(s.topicChat[req.TopicId])) || count < req.Limit; i++ {
+	for i = req.FromMessageId; i < int64(len(s.topicChat[req.TopicId])) && count < req.Limit; i++ {
 		messages = append(messages, s.topicChat[req.TopicId][i])
 		count++
 	}
@@ -234,8 +309,130 @@ func (s *Server) GetMessages(ctx context.Context, req *pb.GetMessagesRequest) (*
 	return &pb.GetMessagesResponse{Messages: messages}, nil
 }
 
+type subscription struct {
+	userID int64
+	topics []int64
+	stream pb.MessageBoard_SubscribeTopicServer
+	ch     chan *pb.MessageEvent
+}
+
+type event struct {
+	Message *pb.MessageEvent
+	topicID int64
+}
+
+// internal event channel
+var eventChannel = make(chan event, 100)
+
 func (s *Server) SubscribeTopic(req *pb.SubscribeTopicRequest, stream pb.MessageBoard_SubscribeTopicServer) error {
-	return fmt.Errorf("not implemented")
+	// validate token
+	s.mutex.Lock()
+	expectedToken := fmt.Sprintf("%d", req.UserId)
+	for _, topic := range req.TopicId {
+		expectedToken += fmt.Sprintf("-%d", topic)
+	}
+
+	var valid bool = false
+	for i, token := range subscriptionRequests {
+		if token == expectedToken {
+			valid = true
+			subscriptionRequests = append(subscriptionRequests[:i], subscriptionRequests[i+1:]...)
+			break
+		}
+	}
+	s.mutex.Unlock()
+
+	if !valid {
+		return fmt.Errorf("invalid subscription token for user ID %d", req.UserId)
+	}
+
+	// create per-subscriber channel and subscription
+	sub := &subscription{
+		userID: req.UserId,
+		topics: req.TopicId,
+		stream: stream,
+		ch:     make(chan *pb.MessageEvent, 32),
+	}
+
+	// register subscriber
+	s.mutex.Lock()
+	s.subscribers = append(s.subscribers, sub)
+	s.mutex.Unlock()
+
+	// ensure cleanup on exit
+	defer func() {
+		s.mutex.Lock()
+		for i, subscriber := range s.subscribers {
+			if subscriber == sub {
+				s.subscribers = append(s.subscribers[:i], s.subscribers[i+1:]...)
+				break
+			}
+		}
+		s.mutex.Unlock()
+		close(sub.ch)
+		log.Printf("user ID %d unsubscribed", req.UserId)
+	}()
+
+	log.Printf("user ID %d subscribed to topics %v from message ID %d", req.UserId, req.TopicId, req.FromMessageId)
+
+	// replay historical messages for subscribed topics (from from_message_id onwards)
+	s.mutex.RLock()
+	sequenceNumber := int64(0)
+	for _, topicID := range req.TopicId {
+		for _, msg := range s.topicChat[topicID] {
+			if msg.Id >= req.FromMessageId {
+				sequenceNumber++
+				histEvent := &pb.MessageEvent{
+					SequenceNumber: sequenceNumber,
+					Op:             pb.OpType_OP_POST,
+					Message:        msg,
+					EventAt:        msg.CreatedAt,
+				}
+				if err := stream.Send(histEvent); err != nil {
+					s.mutex.RUnlock()
+					log.Printf("error sending history to user ID %d: %v", req.UserId, err)
+					return err
+				}
+			}
+		}
+	}
+	s.mutex.RUnlock()
+
+	// stream live events to this subscriber (single-sender per stream)
+	ctx := stream.Context()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// client disconnected
+			return ctx.Err()
+		case msg, ok := <-sub.ch:
+			if !ok {
+				return nil
+			}
+			// assign sequence number per subscriber
+			sequenceNumber++
+			msg.SequenceNumber = sequenceNumber
+
+			if err := stream.Send(msg); err != nil {
+				log.Printf("error sending to user ID %d: %v", req.UserId, err)
+				return err
+			}
+		}
+	}
+}
+
+var IP string
+
+func outboundIP() (net.IP, error) {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP, nil
 }
 
 func main() {
@@ -243,6 +440,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
+
+	// Get the actual IP clients can use
+	ip, err := outboundIP()
+	if err != nil {
+		log.Fatalf("failed to get outbound IP: %v", err)
+	}
+
+	// Extract port from listener
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	IP = net.JoinHostPort(ip.String(), port)
 
 	// create a new grpc server
 	grpcServer := grpc.NewServer()
@@ -252,7 +459,7 @@ func main() {
 	// register MessageBoard service
 	pb.RegisterMessageBoardServer(grpcServer, s)
 
-	log.Println("server is running on port 50051...")
+	log.Printf("server is running on %s...", IP)
 
 	if err := grpcServer.Serve(listener); err != nil {
 		log.Fatalf("failed to serve: %v", err)
