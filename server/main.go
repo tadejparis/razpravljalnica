@@ -265,7 +265,7 @@ func (s *Server) LikeMessage(ctx context.Context, req *pb.LikeMessageRequest) (*
 	}
 
 	s.likesByMessage[req.MessageId][req.UserId] = struct{}{}
-	msg.Likes = int32(len(s.likesByMessage[req.MessageId]))
+	msg.Likes = msg.Likes + 1
 
 	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_LIKE, Message: msg, EventAt: timestamppb.Now()}, topicID: msg.TopicId}
 
