@@ -194,17 +194,14 @@ func main() {
 
 	// glavni menu razpravljalnice
 	mainMenu.
-		AddItem("All topics", "Some explanatory text", 0, func() {
+		AddItem("All topics", "", 0, func() {
 			generateTopicsPage(&client, pages, (*user).Id)
 			pages.SwitchToPage("topicsPage")
 		}).
-		AddItem("Create Topic", "Some explanatory text", 0, func() {
+		AddItem("Create Topic", "", 0, func() {
 			generateCreateTopicPage(&client, pages)
 			pages.SwitchToPage("createTopicPage")
 		}).
-		AddItem("Update Message", "Some explanatory text", 0, nil).
-		AddItem("Delete Message", "Some explanatory text", 0, nil).
-		AddItem("Like Message", "Some explanatory text", 0, nil).
 		AddItem("Quit", "Press to exit", 'q', func() {
 			app.Stop()
 		})
