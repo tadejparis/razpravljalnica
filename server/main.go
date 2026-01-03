@@ -30,7 +30,8 @@ type Server struct {
 	messages      map[int64]*pb.Message
 	nextMessageID int64
 
-	subscribers []*subscription
+	subscribers    []*subscription
+	likesByMessage map[int64]map[int64]struct{}
 }
 
 func NewServer() *Server {
@@ -45,7 +46,8 @@ func NewServer() *Server {
 		messages:      make(map[int64]*pb.Message),
 		nextMessageID: 1,
 
-		subscribers: make([]*subscription, 0),
+		subscribers:    make([]*subscription, 0),
+		likesByMessage: make(map[int64]map[int64]struct{}),
 	}
 
 	// press enter in the server terminal to print the state
@@ -187,6 +189,8 @@ func (s *Server) PostMessage(ctx context.Context, req *pb.PostMessageRequest) (*
 
 	s.topicChat[req.TopicId] = append(s.topicChat[req.TopicId], message)
 	s.messages[s.nextMessageID] = message
+
+	s.likesByMessage[message.Id] = make(map[int64]struct{})
 	s.nextMessageID++
 
 	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_POST, Message: message, EventAt: timestamppb.Now()}, topicID: message.TopicId}
@@ -237,6 +241,7 @@ func (s *Server) DeleteMessage(ctx context.Context, req *pb.DeleteMessageRequest
 	}
 
 	delete(s.messages, req.MessageId)
+	delete(s.likesByMessage, req.MessageId)
 
 	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_DELETE, Message: nil, EventAt: timestamppb.Now()}, topicID: req.TopicId}
 
@@ -250,16 +255,22 @@ func (s *Server) LikeMessage(ctx context.Context, req *pb.LikeMessageRequest) (*
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.messages[req.MessageId] == nil {
+	msg := s.messages[req.MessageId]
+	if msg == nil {
 		return nil, fmt.Errorf("message with ID %d does not exist", req.MessageId)
 	}
 
-	s.messages[req.MessageId].Likes++
+	if _, liked := s.likesByMessage[req.MessageId][req.UserId]; liked {
+		return msg, nil
+	}
 
-	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_LIKE, Message: s.messages[req.MessageId], EventAt: timestamppb.Now()}, topicID: s.messages[req.MessageId].TopicId}
+	s.likesByMessage[req.MessageId][req.UserId] = struct{}{}
+	msg.Likes = int32(len(s.likesByMessage[req.MessageId]))
 
-	log.Printf("liked message: messageID=%d, totalLikes=%d", req.MessageId, s.messages[req.MessageId].Likes)
-	return s.messages[req.MessageId], nil
+	eventChannel <- event{Message: &pb.MessageEvent{SequenceNumber: 0, Op: pb.OpType_OP_LIKE, Message: msg, EventAt: timestamppb.Now()}, topicID: msg.TopicId}
+
+	log.Printf("liked message: messageID=%d, totalLikes=%d", req.MessageId, msg.Likes)
+	return msg, nil
 }
 
 // stores tokens which nodes will check to validate SubscribeTopicRequests
