@@ -27,7 +27,7 @@ func generateTopicsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_
 	// populate topicsList with topics from server
 	for _, topic := range allTopics.Topics {
 		topicsList.AddItem(topic.Name, "", 0, func() {
-			generateTopicPostsPage(client, pages, user_id, topic.Id)
+			generateTopicPostsPage(client, pages, user_id, topic.GetId())
 			pages.SwitchToPage("topicPostsPage")
 		})
 	}
