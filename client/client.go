@@ -135,12 +135,13 @@ func generateCreatePostPage(client *pb.MessageBoardClient, pages *tview.Pages, u
 		AddButton("Enter", func() {
 			textArea := createPostForm.GetFormItem(0).(*tview.TextArea)
 			text := textArea.GetText()
-			_, err := (*client).PostMessage(context.Background(), &pb.PostMessageRequest{TopicId: topic_id, UserId: user_id, Text: text}) // TODO: proper field values
+			_, err := (*client).PostMessage(context.Background(), &pb.PostMessageRequest{TopicId: topic_id, UserId: user_id, Text: text})
 			checkError(err)
 			generateTopicPostsPage(client, pages, user_id, topic_id)
 			pages.SwitchToPage("topicPostsPage")
 		}).
 		AddButton("Cancel", func() {
+			pages.SwitchToPage("topicPostsPage")
 		})
 
 	createPostForm.SetBorder(true).SetTitle("New post").SetTitleAlign(tview.AlignLeft)
