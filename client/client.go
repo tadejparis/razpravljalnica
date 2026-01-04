@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	pb "razpravljalnica"
+
 	"github.com/rivo/tview"
-	pb "github.com/tadejparis/razpravljalnica/specifikacija"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
