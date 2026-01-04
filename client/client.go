@@ -49,7 +49,7 @@ func generateTopicsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_
 func generateTopicPostsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, topic_id int64) {
 
 	topicPostsList := tview.NewList()
-	posts, err := (*client).GetMessages(context.Background(), &pb.GetMessagesRequest{TopicId: topic_id})
+	posts, err := (*client).GetMessages(context.Background(), &pb.GetMessagesRequest{TopicId: topic_id, Limit: 1024})
 	checkError(err)
 	for _, post := range posts.Messages {
 		topicPostsList.AddItem(post.GetText(), fmt.Sprintf("Likes: %d", post.GetLikes()), 0, func() {
