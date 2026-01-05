@@ -128,7 +128,7 @@ func generatePostPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id
 				generateEditPostPage(client, pages, user_id, post)
 			}).
 			AddButton("Delete", func() {
-				_, err := (*client).DeleteMessage(context.Background(), &pb.DeleteMessageRequest{MessageId: post.Id, UserId: user_id})
+				_, err := (*client).DeleteMessage(context.Background(), &pb.DeleteMessageRequest{MessageId: post.GetId(), UserId: user_id, TopicId: post.GetTopicId()})
 				checkError(err)
 			})
 	}
