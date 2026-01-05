@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	pb "razpravljalnica"
 
@@ -18,7 +19,7 @@ func checkError(err error) {
 	}
 }
 
-func generateTopicsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64) {
+func generateTopicsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, subscribedTopics *[]int64) {
 
 	topicsList := tview.NewList()
 	// get topics from server
@@ -27,7 +28,7 @@ func generateTopicsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_
 	// populate topicsList with topics from server
 	for _, topic := range allTopics.Topics {
 		topicsList.AddItem(topic.Name, "", 0, func() {
-			generateTopicPostsPage(client, pages, user_id, topic.GetId())
+			generateTopicPostsPage(client, pages, user_id, topic.GetId(), subscribedTopics)
 			pages.SwitchToPage("topicPostsPage")
 		})
 	}
@@ -50,7 +51,7 @@ func generateTopicsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_
 	(*pages).AddPage("topicsPage", topicsFlex, true, true)
 }
 
-func generateTopicPostsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, topic_id int64) {
+func generateTopicPostsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, topic_id int64, subscribedTopics *[]int64) {
 
 	topicPostsList := tview.NewList()
 	posts, err := (*client).GetMessages(context.Background(), &pb.GetMessagesRequest{TopicId: topic_id, Limit: 1024})
@@ -64,9 +65,21 @@ func generateTopicPostsPage(client *pb.MessageBoardClient, pages *tview.Pages, u
 	topicPostsNavigationForm := tview.NewForm().
 		AddButton("Back", func() {
 			pages.SwitchToPage("topicsPage")
-		}).
+		})
+	if !(slices.Contains(*subscribedTopics, topic_id)) {
+		topicPostsNavigationForm.
+			AddButton("Subscribe to topic", func() {
+				*subscribedTopics = append(*subscribedTopics, topic_id)
+				snr, err := (*client).GetSubscriptionNode(context.Background(), &pb.SubscriptionNodeRequest{UserId: user_id, TopicId: *subscribedTopics})
+				checkError(err)
+				_, err = (*client).SubscribeTopic(context.Background(), &pb.SubscribeTopicRequest{UserId: user_id, TopicId: *subscribedTopics, FromMessageId: 1, SubscribeToken: snr.GetSubscribeToken()})
+				checkError(err)
+				topicPostsNavigationForm.RemoveButton(1)
+			})
+	}
+	topicPostsNavigationForm.
 		AddButton("Create post", func() {
-			generateCreatePostPage(client, pages, user_id, topic_id)
+			generateCreatePostPage(client, pages, user_id, topic_id, subscribedTopics)
 			pages.SwitchToPage("createPostPage")
 		})
 
@@ -131,7 +144,7 @@ func generatePostPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id
 	(*pages).AddPage("postPage", postFlex, true, true)
 }
 
-func generateCreatePostPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, topic_id int64) {
+func generateCreatePostPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, topic_id int64, subscribedTopics *[]int64) {
 	// forma: ustvari nov post v topicu
 	createPostForm := tview.NewForm()
 	createPostForm.
@@ -141,7 +154,7 @@ func generateCreatePostPage(client *pb.MessageBoardClient, pages *tview.Pages, u
 			text := textArea.GetText()
 			_, err := (*client).PostMessage(context.Background(), &pb.PostMessageRequest{TopicId: topic_id, UserId: user_id, Text: text})
 			checkError(err)
-			generateTopicPostsPage(client, pages, user_id, topic_id)
+			generateTopicPostsPage(client, pages, user_id, topic_id, subscribedTopics)
 			pages.SwitchToPage("topicPostsPage")
 		}).
 		AddButton("Cancel", func() {
@@ -198,10 +211,12 @@ func main() {
 	// deklariramo main menu
 	mainMenu := tview.NewList()
 
+	var subscribedTopics []int64
+
 	// glavni menu razpravljalnice
 	mainMenu.
 		AddItem("All topics", "", 0, func() {
-			generateTopicsPage(&client, pages, (*user).Id)
+			generateTopicsPage(&client, pages, (*user).Id, &subscribedTopics)
 			pages.SwitchToPage("topicsPage")
 		}).
 		AddItem("Quit", "Press to exit", 'q', func() {
