@@ -35,6 +35,10 @@ func generateTopicsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_
 	topicsNavigationForm := tview.NewForm().
 		AddButton("Back", func() {
 			pages.SwitchToPage("mainMenuPage")
+		}).
+		AddButton("Create topic", func() {
+			generateCreateTopicPage(client, pages)
+			pages.SwitchToPage("createTopicPage")
 		})
 
 	topicsFlex := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -199,10 +203,6 @@ func main() {
 		AddItem("All topics", "", 0, func() {
 			generateTopicsPage(&client, pages, (*user).Id)
 			pages.SwitchToPage("topicsPage")
-		}).
-		AddItem("Create Topic", "", 0, func() {
-			generateCreateTopicPage(&client, pages)
-			pages.SwitchToPage("createTopicPage")
 		}).
 		AddItem("Quit", "Press to exit", 'q', func() {
 			app.Stop()
