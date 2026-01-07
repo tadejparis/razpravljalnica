@@ -142,6 +142,12 @@ func (s *Server) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	for _, user := range s.users {
+		if user.Name == req.Name {
+			return nil, fmt.Errorf("user with name %s already exists", req.Name)
+		}
+	}
+
 	user := &pb.User{
 		Id:   s.nextUserID,
 		Name: req.Name,
@@ -157,6 +163,12 @@ func (s *Server) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb
 func (s *Server) CreateTopic(ctx context.Context, req *pb.CreateTopicRequest) (*pb.Topic, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+
+	for _, topic := range s.topics {
+		if topic.Name == req.Name {
+			return nil, fmt.Errorf("topic with name %s already exists", req.Name)
+		}
+	}
 
 	topic := &pb.Topic{
 		Id:   s.nextTopicID,
@@ -420,7 +432,7 @@ func (s *Server) SubscribeTopic(req *pb.SubscribeTopicRequest, stream pb.Message
 			if !ok {
 				return nil
 			}
-			// assign sequence number per subscriber
+
 			sequenceNumber++
 			msg.SequenceNumber = sequenceNumber
 
