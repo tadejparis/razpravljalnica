@@ -144,7 +144,7 @@ func (s *Server) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb
 
 	for _, user := range s.users {
 		if user.Name == req.Name {
-			return nil, fmt.Errorf("user with name %s already exists", req.Name)
+			return user, nil
 		}
 	}
 
