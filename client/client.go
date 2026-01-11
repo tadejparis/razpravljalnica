@@ -3,11 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"slices"
-
+	"os"
 	pb "razpravljalnica"
 
-	"github.com/rivo/tview"
+	"github.com/urfave/cli/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -19,183 +18,8 @@ func checkError(err error) {
 	}
 }
 
-func generateTopicsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, subscribedTopics *[]int64) {
-
-	topicsList := tview.NewList()
-	// get topics from server
-	allTopics, err := (*client).ListTopics(context.Background(), &emptypb.Empty{})
-	checkError(err)
-	// populate topicsList with topics from server
-	for _, topic := range allTopics.Topics {
-		topicsList.AddItem(topic.Name, "", 0, func() {
-			generateTopicPostsPage(client, pages, user_id, topic.GetId(), subscribedTopics)
-			pages.SwitchToPage("topicPostsPage")
-		})
-	}
-
-	topicsNavigationForm := tview.NewForm().
-		AddButton("Back", func() {
-			pages.SwitchToPage("mainMenuPage")
-		}).
-		AddButton("Create topic", func() {
-			generateCreateTopicPage(client, pages)
-			pages.SwitchToPage("createTopicPage")
-		})
-
-	topicsFlex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(topicsNavigationForm, 0, 1, false).
-		AddItem(topicsList, 0, 7, false)
-
-	topicsList.SetBorder(true).SetTitle("All topics").SetTitleAlign(tview.AlignLeft)
-	(*pages).RemovePage("topicsPage") // odstrani star page najprej
-	(*pages).AddPage("topicsPage", topicsFlex, true, true)
-}
-
-func generateTopicPostsPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, topic_id int64, subscribedTopics *[]int64) {
-
-	topicPostsList := tview.NewList()
-	posts, err := (*client).GetMessages(context.Background(), &pb.GetMessagesRequest{TopicId: topic_id, Limit: 1024})
-	checkError(err)
-	for _, post := range posts.Messages {
-		topicPostsList.AddItem(post.GetText(), fmt.Sprintf("Likes: %d", post.GetLikes()), 0, func() {
-			generatePostPage(client, pages, user_id, post)
-		})
-	}
-
-	topicPostsNavigationForm := tview.NewForm().
-		AddButton("Back", func() {
-			pages.SwitchToPage("topicsPage")
-		})
-	if !(slices.Contains(*subscribedTopics, topic_id)) {
-		topicPostsNavigationForm.
-			AddButton("Subscribe to topic", func() {
-				*subscribedTopics = append(*subscribedTopics, topic_id)
-				snr, err := (*client).GetSubscriptionNode(context.Background(), &pb.SubscriptionNodeRequest{UserId: user_id, TopicId: *subscribedTopics})
-				checkError(err)
-				_, err = (*client).SubscribeTopic(context.Background(), &pb.SubscribeTopicRequest{UserId: user_id, TopicId: *subscribedTopics, FromMessageId: 1, SubscribeToken: snr.GetSubscribeToken()})
-				checkError(err)
-				topicPostsNavigationForm.RemoveButton(1)
-			})
-	}
-	topicPostsNavigationForm.
-		AddButton("Create post", func() {
-			generateCreatePostPage(client, pages, user_id, topic_id, subscribedTopics)
-			pages.SwitchToPage("createPostPage")
-		})
-
-	topicPostsFlex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(topicPostsNavigationForm, 0, 1, false).
-		AddItem(topicPostsList, 0, 7, false)
-
-	(*pages).RemovePage("topicPostsPage") // odstrani star page najprej
-	(*pages).AddPage("topicPostsPage", topicPostsFlex, true, true)
-}
-
-func generateEditPostPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, post *pb.Message) {
-	editPostForm := tview.NewForm()
-	editPostForm.
-		AddTextArea("", post.GetText(), 256, 0, 0, nil).
-		AddButton("Save", func() {
-			textArea := editPostForm.GetFormItem(0).(*tview.TextArea)
-			text := textArea.GetText()
-			_, err := (*client).UpdateMessage(context.Background(), &pb.UpdateMessageRequest{MessageId: post.Id, UserId: user_id, Text: text})
-			checkError(err)
-			pages.SwitchToPage("topicsPage")
-		}).
-		AddButton("Cancel", func() {
-			pages.SwitchToPage("postPage")
-		})
-
-	(*pages).RemovePage("generateEditPostPage") // odstrani star page najprej
-	(*pages).AddPage("generateEditPostPage", editPostForm, true, true)
-}
-
-func generatePostPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, post *pb.Message) {
-
-	owner := (user_id == post.UserId)
-	postNavigationForm := tview.NewForm().
-		AddButton("Back", func() {
-			pages.SwitchToPage("topicsPage")
-		}).
-		AddButton("Like", func() {
-			_, err := (*client).LikeMessage(context.Background(), &pb.LikeMessageRequest{MessageId: post.Id, UserId: user_id})
-			checkError(err)
-		})
-
-	if owner {
-		postNavigationForm.
-			AddButton("Edit", func() {
-				generateEditPostPage(client, pages, user_id, post)
-			}).
-			AddButton("Delete", func() {
-				_, err := (*client).DeleteMessage(context.Background(), &pb.DeleteMessageRequest{MessageId: post.GetId(), UserId: user_id, TopicId: post.GetTopicId()})
-				checkError(err)
-			})
-	}
-
-	postText := tview.NewTextView()
-	fmt.Fprintf(postText, "%s", post.GetText())
-
-	postFlex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(postNavigationForm, 0, 1, false).
-		AddItem(postText, 0, 7, false)
-
-	(*pages).RemovePage("postPage") // odstrani star page najprej
-	(*pages).AddPage("postPage", postFlex, true, true)
-}
-
-func generateCreatePostPage(client *pb.MessageBoardClient, pages *tview.Pages, user_id int64, topic_id int64, subscribedTopics *[]int64) {
-	// forma: ustvari nov post v topicu
-	createPostForm := tview.NewForm()
-	createPostForm.
-		AddTextArea("Post content", "", 256, 0, 0, nil).
-		AddButton("Enter", func() {
-			textArea := createPostForm.GetFormItem(0).(*tview.TextArea)
-			text := textArea.GetText()
-			_, err := (*client).PostMessage(context.Background(), &pb.PostMessageRequest{TopicId: topic_id, UserId: user_id, Text: text})
-			checkError(err)
-			generateTopicPostsPage(client, pages, user_id, topic_id, subscribedTopics)
-			pages.SwitchToPage("topicPostsPage")
-		}).
-		AddButton("Cancel", func() {
-			pages.SwitchToPage("topicPostsPage")
-		})
-
-	createPostForm.SetBorder(true).SetTitle("New post").SetTitleAlign(tview.AlignLeft)
-
-	(*pages).RemovePage("createPostPage") // odstrani star page najprej
-	(*pages).AddPage("createPostPage", createPostForm, true, true)
-}
-
-func generateCreateTopicPage(client *pb.MessageBoardClient, pages *tview.Pages) {
-	// forma: ustvari nov topic
-	createTopicForm := tview.NewForm()
-	createTopicForm.
-		AddInputField("Topic name", "", 20, nil, nil).
-		AddButton("Enter", func() {
-			pages.SwitchToPage("mainMenuPage")
-			inputField := createTopicForm.GetFormItem(0).(*tview.InputField)
-			name := inputField.GetText()
-			_, err := (*client).CreateTopic(context.Background(), &pb.CreateTopicRequest{Name: name})
-			checkError(err)
-		}).
-		AddButton("Cancel", func() {
-			pages.SwitchToPage("mainMenuPage")
-		})
-
-	createTopicForm.SetBorder(true).SetTitle("New topic").SetTitleAlign(tview.AlignLeft)
-
-	(*pages).RemovePage("createTopicPage") // odstrani star page najprej
-	(*pages).AddPage("createTopicPage", createTopicForm, true, true)
-
-}
-
 func main() {
-
-	app := tview.NewApplication()
-	pages := tview.NewPages()
-
-	// TODO: Dial options?
+	// odpremo povezavo
 	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	checkError(err)
 	defer conn.Close()
@@ -206,29 +30,199 @@ func main() {
 	fmt.Print("Enter a username: ")
 	fmt.Scanf("%s\n", &name)
 	user, err := client.CreateUser(context.Background(), &pb.CreateUserRequest{Name: name})
+	fmt.Println(user.GetId())
 	checkError(err)
-
-	// deklariramo main menu
-	mainMenu := tview.NewList()
 
 	var subscribedTopics []int64
+	var subClient pb.MessageBoard_SubscribeTopicClient
 
-	// glavni menu razpravljalnice
-	mainMenu.
-		AddItem("All topics", "", 0, func() {
-			generateTopicsPage(&client, pages, (*user).Id, &subscribedTopics)
-			pages.SwitchToPage("topicsPage")
-		}).
-		AddItem("Quit", "Press to exit", 'q', func() {
-			app.Stop()
-		})
-	mainMenu.SetBorder(true).SetTitle("Razpravljalnica").SetTitleAlign(tview.AlignLeft)
-	pages.AddPage("mainMenuPage", mainMenu, true, true)
+	cmd := &cli.Command{
+		Commands: []*cli.Command{
+			{
+				Name:  "all_topics",
+				Usage: "list all topics",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					allTopics, err := client.ListTopics(context.Background(), &emptypb.Empty{})
+					checkError(err)
+					for _, topic := range allTopics.GetTopics() {
+						fmt.Printf("name: %s\tid: %d\n", topic.GetName(), topic.GetId())
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "stream_subscribed",
+				Usage: "stream all subscribed messages",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					for {
+						me, err := subClient.Recv()
+						checkError(err)
 
-	app.SetRoot(pages, true)
-	app.EnableMouse(true)
+						fmt.Println(me.GetMessage().GetText())
+					}
+					// return nil
+				},
+			},
+			{
+				Name:  "topic",
+				Usage: "options for topics",
+				Arguments: []cli.Argument{
+					&cli.StringArg{
+						Name: "topic_name",
+					},
+				},
+				Commands: []*cli.Command{
+					{
+						Name:  "create",
+						Usage: "create a new topic",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							_, err := client.CreateTopic(context.Background(), &pb.CreateTopicRequest{Name: cmd.StringArg("topic_name")})
+							checkError(err)
+							return nil
+						},
+					},
+					{
+						Name:  "listall",
+						Usage: "list all posts in topic",
+						Arguments: []cli.Argument{
+							&cli.Int64Arg{
+								Name: "topic_id",
+							},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							posts, err := client.GetMessages(context.Background(), &pb.GetMessagesRequest{
+								TopicId: cmd.Int64Arg("topic_id"),
+								Limit:   1024})
+							checkError(err)
+							for _, post := range posts.Messages {
+								fmt.Printf("id: %d\ntext: %s\nlikes: %d\n\n", post.GetId(), post.GetText(), post.GetLikes())
+							}
+							return nil
+						},
+					},
+					{
+						Name:  "subscribe",
+						Usage: "subscribe to a topic",
+						Arguments: []cli.Argument{
+							&cli.Int64Arg{
+								Name: "topic_id",
+							},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							subscribedTopics = append(subscribedTopics, cmd.Int64Arg("topic_id"))
+							fmt.Printf("Subscribed topics: ")
+							for _, topicId := range subscribedTopics {
+								fmt.Printf("%d  ", topicId)
+							}
+							fmt.Println()
 
-	err = app.Run()
+							snr, err := client.GetSubscriptionNode(context.Background(), &pb.SubscriptionNodeRequest{
+								UserId:  user.GetId(),
+								TopicId: subscribedTopics})
+							checkError(err)
+							subClient, err = client.SubscribeTopic(context.Background(), &pb.SubscribeTopicRequest{
+								UserId:         user.GetId(),
+								TopicId:        subscribedTopics,
+								FromMessageId:  1,
+								SubscribeToken: snr.GetSubscribeToken()})
+							checkError(err)
+							return nil
+						},
+					},
+				},
+			},
+			{
+				Name:  "post",
+				Usage: "options for posts",
+				Commands: []*cli.Command{
+					{
+						Name:  "create",
+						Usage: "create a new post",
+						Arguments: []cli.Argument{
+							&cli.Int64Arg{
+								Name: "topic_id",
+							},
+							&cli.StringArg{
+								Name: "post_content",
+							},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							_, err := client.PostMessage(context.Background(), &pb.PostMessageRequest{
+								TopicId: cmd.Int64Arg("topic_id"),
+								UserId:  user.GetId(),
+								Text:    cmd.StringArg("post_content")})
+							checkError(err)
+							return nil
+						},
+					},
+					{
+						Name:  "delete",
+						Usage: "delete an existing post you've created",
+						Arguments: []cli.Argument{
+							&cli.Int64Arg{
+								Name: "post_id",
+							},
+							&cli.Int64Arg{
+								Name: "topic_id",
+							},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							_, err = client.DeleteMessage(context.Background(), &pb.DeleteMessageRequest{
+								MessageId: cmd.Int64Arg("post_id"),
+								UserId:    user.GetId(),
+								TopicId:   cmd.Int64Arg("topic_id")})
+							checkError(err)
+							return nil
+						},
+					},
+					{
+						Name:  "like",
+						Usage: "like an existing post",
+						Arguments: []cli.Argument{
+							&cli.Int64Arg{
+								Name: "post_id",
+							},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							_, err = client.LikeMessage(context.Background(), &pb.LikeMessageRequest{
+								MessageId: cmd.Int64Arg("post_id"),
+								UserId:    user.GetId()})
+							checkError(err)
+							return nil
+						},
+					},
+					{
+						Name:  "update",
+						Usage: "update an existing post you've created",
+						Arguments: []cli.Argument{
+							&cli.Int64Arg{
+								Name: "post_id",
+							},
+							&cli.StringArg{
+								Name: "post_content",
+							},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							_, err = client.UpdateMessage(context.Background(), &pb.UpdateMessageRequest{
+								MessageId: cmd.Int64Arg("post_id"),
+								UserId:    user.GetId(),
+								Text:      cmd.StringArg("post_content")})
+							checkError(err)
+							return nil
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// var topicId int64
+	// topicId = 1
+
+	// // subscribe to topic topicId
+
+	// // stream messages from subscribed topic
+
+	err = cmd.Run(context.Background(), os.Args)
 	checkError(err)
-
 }
