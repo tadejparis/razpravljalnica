@@ -30,7 +30,7 @@ func main() {
 	fmt.Print("Enter a username: ")
 	fmt.Scanf("%s\n", &name)
 	user, err := client.CreateUser(context.Background(), &pb.CreateUserRequest{Name: name})
-	fmt.Println(user.GetId())
+	//fmt.Println(user.GetId())
 	checkError(err)
 
 	var subscribedTopics []int64
@@ -75,6 +75,11 @@ func main() {
 					{
 						Name:  "create",
 						Usage: "create a new topic",
+						Arguments: []cli.Argument{
+							&cli.StringArg{
+								Name: "topic_name",
+							},
+						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							_, err := client.CreateTopic(context.Background(), &pb.CreateTopicRequest{Name: cmd.StringArg("topic_name")})
 							checkError(err)
@@ -215,13 +220,6 @@ func main() {
 			},
 		},
 	}
-
-	// var topicId int64
-	// topicId = 1
-
-	// // subscribe to topic topicId
-
-	// // stream messages from subscribed topic
 
 	err = cmd.Run(context.Background(), os.Args)
 	checkError(err)
