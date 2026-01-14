@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	pb "razpravljalnica"
+	"strconv"
 
 	"github.com/urfave/cli/v3"
 	"google.golang.org/grpc"
@@ -48,19 +49,6 @@ func main() {
 						fmt.Printf("name: %s\tid: %d\n", topic.GetName(), topic.GetId())
 					}
 					return nil
-				},
-			},
-			{
-				Name:  "stream_subscribed",
-				Usage: "stream all subscribed messages",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					for {
-						me, err := subClient.Recv()
-						checkError(err)
-
-						fmt.Println(me.GetMessage().GetText())
-					}
-					// return nil
 				},
 			},
 			{
@@ -108,13 +96,12 @@ func main() {
 					{
 						Name:  "subscribe",
 						Usage: "subscribe to a topic",
-						Arguments: []cli.Argument{
-							&cli.Int64Arg{
-								Name: "topic_id",
-							},
-						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							subscribedTopics = append(subscribedTopics, cmd.Int64Arg("topic_id"))
+							for _, arg := range cmd.Args().Slice() {
+								ia, err := strconv.ParseInt(arg, 10, 64)
+								checkError(err)
+								subscribedTopics = append(subscribedTopics, ia)
+							}
 							fmt.Printf("Subscribed topics: ")
 							for _, topicId := range subscribedTopics {
 								fmt.Printf("%d  ", topicId)
@@ -131,7 +118,14 @@ func main() {
 								FromMessageId:  1,
 								SubscribeToken: snr.GetSubscribeToken()})
 							checkError(err)
-							return nil
+
+							for {
+								me, err := subClient.Recv()
+								checkError(err)
+
+								fmt.Println(me.GetMessage().GetText())
+							}
+							//return nil
 						},
 					},
 				},
